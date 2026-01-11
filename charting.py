@@ -198,10 +198,6 @@ def buildPoolChart(token0, token1, pair, maxLen):
 #Example usage:
 if __name__ == "__main__":
 
-#data = getAllERC20Transactions('0xe945683b3462d2603a18bdfbb19261c6a4f03ad1', None, get_first_tx_block('0xe945683b3462d2603a18bdfbb19261c6a4f03ad1'), 25_164_015)
-
-#getERC20Transactions('0xe945683b3462d2603a18bdfbb19261c6a4f03ad1', 0, 25_164_015)
-
     token0 = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'
     token1 = '0x0f7dc5d02cc1e1f5ee47854d534d332a1081ccc8'
     pair = '0xf97503af8230a7e72909d6614f45e88168ff3c10'
