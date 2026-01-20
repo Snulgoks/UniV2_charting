@@ -388,6 +388,15 @@ def getAllTransfers(token_contract=None, maxLen=None, startBlock=None, endBlock=
     print("fetched transactions:", len(all_txs))
     return all_txs
 
+def flatten(lst):
+    result = []
+    for item in lst:
+        if isinstance(item, list):
+            result.extend(flatten(item))
+        else:
+            result.append(item)
+    return result
+
 import bisect
 from collections import defaultdict
 
@@ -406,10 +415,10 @@ def buildHoldersDict(
     # ----------------------------------
     # 0. PREP FAST STRUCTURES
     # ----------------------------------
+    pair_addresses = flatten(pair_addresses)
     pair_set = set(pair_addresses)
     ZERO = "0x0000000000000000000000000000000000000000"
-    HUB = {"0x6ae83320fe7508489c3c2e2575e084c0af9689f1"}
-    SKIP = pair_set | HUB | {ZERO}
+    SKIP = pair_set | {ZERO}
 
     # Pre-convert ALL timestamps to int ONCE
     for tx in all_txs:
@@ -709,7 +718,12 @@ def build_bwap_series(snapshots, timestamps):
 
     return timestamps, bwap_axis
 
+import csv
 
+def load_dune_data_csv(filename="dune_results_complete.csv"):
+    with open(filename, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        return list(reader)
 
 
 
@@ -719,14 +733,20 @@ def build_bwap_series(snapshots, timestamps):
 #Example usage:
 if __name__ == "__main__":
     token0 = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'
-    token1 = '0xe0f63a424a4439cbe457d80e4f4b51ad25b2c56c'
-    pair = '0x52c77b0cb827afbad022e6d6caf2c44452edbc39'
+    token1 = '0x0f7dc5d02cc1e1f5ee47854d534d332a1081ccc8'
+    pair = '0xf97503af8230a7e72909d6614f45e88168ff3c10'
     maxLen = 10000000
     [x_axis, y_axis, liq, pool] = buildPoolChart(token0,token1,pair,maxLen , clean = 1)
     all_txs = getAllTransfers(token1, maxLen, 0, 30164015, holder_address=None)
+    
+    #Load all known EVM CEX addresses
+    all_cex_dict = load_dune_data_csv("dune_known_cex_addresses.csv")
+    all_cex_addresses = [row['address'] for row in all_cex_dict]
+    
     pair_addresses = [
         pair,
         token1,
+        all_cex_addresses,
         '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad',  # uniswap_universal_router
         '0x74de5d4fcbf63e00296fd95d33236b9794016631',  # metamask_swap_router
         '0xb1ca6e0283503d2bd17c7a94c57f5f556bc42179', # OGSM V3 Pool
@@ -753,11 +773,14 @@ if __name__ == "__main__":
         '0xb300000b72deaeb607a12d5f54773d1c19c7028d', #Binance dex router
         '0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae', #LiFi Diamond
         '0x9642b23ed1e01df1092b92641051881a322f5d4e', #MEXC 16
-        '0xc38e4e6a15593f908255214653d3d947ca1c2338' #Mayan: Shift
+        '0xc38e4e6a15593f908255214653d3d947ca1c2338', #Mayan: Shift
+        '0xd152f549545093347a162dce210e7293f1452150', #Disperse.app
+        '0x8fca4ade3a517133ff23ca55cdaea29c78c990b8', #Poloniex 7
+        
     ]
     print('Building holders dict')
     start_time = time.time()
-    holders_snaps, clusters_snaps, snapshotTimes  = buildHoldersDict(all_txs, x_axis, y_axis, pair_addresses,avg_time_threshold=3600*24, trxCountThreshold=100, min_snapshot_delta = 3600*12, track_trades=False, snapshot_full=False, verbose = True )
+    holders_snaps, clusters_snaps, snapshotTimes  = buildHoldersDict(all_txs, x_axis, y_axis, pair_addresses,avg_time_threshold=3600*24, trxCountThreshold=50, min_snapshot_delta = 3600*12, track_trades=False, snapshot_full=False, verbose = True )
     end_time = time.time()
     execution_time = end_time - start_time
     print(f"Execution time: {execution_time} seconds")
