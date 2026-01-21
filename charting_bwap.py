@@ -735,7 +735,67 @@ def load_dune_data_csv(filename="dune_results_complete.csv"):
         reader = csv.DictReader(f)
         return list(reader)
 
+def count_over_threshold(snaps, threshold):
+    """
+    For each snapshot, return how many holders/clusters
+    have balance > threshold.
 
+    Works for both:
+      - holders_snaps: list of dicts {address -> holder_data}
+      - clusters_snaps: list of lists of cluster dicts
+    """
+    counts = []
+
+    for snap in snaps:
+
+        # Case 1: holders_snaps (dict form)
+        if isinstance(snap, dict):
+            count = sum(
+                1 for h in snap.values()
+                if h.get("balance", 0) > threshold
+            )
+
+        # Case 2: clusters_snaps (list form)
+        else:
+            count = sum(
+                1 for c in snap
+                if c.get("balance", 0) > threshold
+            )
+
+        counts.append(count)
+
+    return counts
+
+def count_new_holders(holders_snaps, threshold):
+    """
+    For each snapshot, count how many addresses become *holders* in that snapshot.
+
+    Definition:
+      - holder in a snapshot: balance > threshold
+      - new holder at snapshot i: holder in snapshot i, but NOT a holder in snapshot i-1
+
+    This allows:
+      - addr was holder, then dropped below threshold or to zero,
+        then later goes above threshold again -> counted as new again.
+    """
+    prev_holders = set()   # addresses that were holders in the previous snapshot
+    counts = []
+
+    for snap in holders_snaps:
+        # addresses that are holders in this snapshot
+        current_holders = {
+            addr for addr, h in snap.items()
+            if h.get("balance", 0) > threshold
+        }
+
+        # new = in current, but not in previous
+        new_holders = current_holders - prev_holders
+        counts.append(len(new_holders))
+
+        # update for next iteration
+        prev_holders = current_holders
+
+    return counts
 
 
 
@@ -817,12 +877,85 @@ if __name__ == "__main__":
     timestamps, bwap_holders = build_bwap_series(holders_snaps, snapshotTimes)
     timestamps, bwap_clusters = build_bwap_series(clusters_snaps, snapshotTimes)
     
+    print('Getting new holder counts')
+    HolderCount     = count_over_threshold(holders_snaps, 100)
+    NewHoldersCount = count_new_holders(holders_snaps, 100)
+    
     print('Plotting chart')
     import matplotlib.pyplot as plt
-    plt.figure(figsize=(12,6))
-    plt.plot(x_axis,y_axis, label = 'price')
-    plt.plot(snapshotTimes, bwap_holders,  label="BWAP (holders)",  color="blue", linewidth=1.8)
-    plt.plot(snapshotTimes, bwap_clusters, label="BWAP (clusters)", color="red",  linewidth=1.8)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    import numpy as np
+    
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    # -----------------------------------------
+    # 1) PRIMARY AXIS (LEFT): PRICE + BWAP
+    # -----------------------------------------
+    ax1.plot(x_axis, y_axis, label='Price', linewidth=1.8, color="black")
+    ax1.plot(snapshotTimes, bwap_holders,  label="BWAP (holders)",  linewidth=1.8, color="blue")
+    ax1.plot(snapshotTimes, bwap_clusters, label="BWAP (clusters)", linewidth=1.8, color="red")
+    
+    ax1.set_xlabel("Time")
+    ax1.set_ylabel("Price")
+    ax1.grid(False)
+    
+    
+    # -----------------------------------------
+    # 2) SECOND AXIS (RIGHT): TOTAL HOLDERS
+    # -----------------------------------------
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("Holder Count")
+    
+    snap_x = np.array(snapshotTimes)
+    
+    # Total holders as filled area
+    ax2.fill_between(
+        snap_x,
+        HolderCount,
+        step="mid",
+        alpha=0.25,
+        color="orange",
+        label="Holders > threshold"
+    )
+    
+    
+    # -----------------------------------------
+    # 3) THIRD AXIS (RIGHT, OFFSET): NEW HOLDERS
+    # -----------------------------------------
+    ax3 = ax1.twinx()
+    
+    # Offset the third axis so it doesn't overlap with ax2
+    ax3.spines["right"].set_position(("axes", 1.12))
+    ax3.set_frame_on(True)
+    ax3.patch.set_visible(False)
+    
+    for sp in ax3.spines.values():
+        sp.set_visible(True)
+    
+    ax3.set_ylabel("New Holders")
+    
+    # Very visible bold line for new holders
+    ax3.plot(
+        snap_x,
+        NewHoldersCount,
+        color="green",
+        linewidth=3,
+        label="New holders > threshold"
+    )
+    
+    
+    # -----------------------------------------
+    # Combined legend collecting from all axes
+    # -----------------------------------------
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    lines3, labels3 = ax3.get_legend_handles_labels()
+    
+    ax1.legend(
+        lines1 + lines2 + lines3,
+        labels1 + labels2 + labels3,
+        loc="upper left"
+    )
+    
+    plt.title("Price, BWAP, Holder Count and New Holders (3-axis view)")
+    plt.tight_layout()
     plt.show()
