@@ -405,6 +405,8 @@ def buildHoldersDict(
     x_axis,
     y_axis,
     pair_addresses,
+    cex_addresses,
+    router_addresses,
     avg_time_threshold=None,
     trxCountThreshold=None,
     min_snapshot_delta=0,
@@ -417,8 +419,12 @@ def buildHoldersDict(
     # ----------------------------------
     pair_addresses = flatten(pair_addresses)
     pair_set = set(pair_addresses)
+    cex_addresses = flatten(cex_addresses)
+    cex_set = set(cex_addresses)
+    router_addresses = flatten(router_addresses)
+    router_set = set(router_addresses)
     ZERO = "0x0000000000000000000000000000000000000000"
-    SKIP = pair_set | {ZERO}
+    SKIP = pair_set | cex_set | router_set | {ZERO}
 
     # Pre-convert ALL timestamps to int ONCE
     for tx in all_txs:
@@ -436,6 +442,7 @@ def buildHoldersDict(
     # ----------------------------------
     # 1. ACTIVITY ANALYSIS + ALLOWED MAP
     # ----------------------------------
+
     addr_ts = defaultdict(list)
     for tx in all_txs:
         t = tx["timeStamp"]
@@ -518,7 +525,6 @@ def buildHoldersDict(
                 "total_invested": 0.0,
             }
             if track_trades:
-                h["acquisitions"] = []
                 h["buys"] = []
                 h["sells"] = []
             holders[addr] = h
@@ -549,6 +555,7 @@ def buildHoldersDict(
             receiver = tx["to"]
             amount = int(tx["value"])
             t = tx["timeStamp"]
+            tx_hash = tx.get("hash", "")  # ← Get transaction hash
 
             # ✅ FAST NEAREST PRICE LOOKUP USING BISECT (O(log M))
             pos = bisect.bisect_right(x_axis_sorted, t)
@@ -582,13 +589,6 @@ def buildHoldersDict(
             if h_r is not None:
                 h_r["balance"] += amount
                 h_r["total_invested"] += invested_value
-                if track_trades:
-                    h_r["acquisitions"].append({
-                        "amount": amount,
-                        "timestamp": t,
-                        "price": price,
-                        "value": invested_value,
-                    })
 
             # --- CLASSIFY BUYS/SELLS (only if tracking) ---
             if track_trades:
@@ -600,6 +600,7 @@ def buildHoldersDict(
                         "timestamp": t,
                         "price": price,
                         "value": invested_value,
+                        "hash": tx_hash,
                     })
                 if h_s is not None and receiver_in_pair and not sender_in_pair:
                     h_s["sells"].append({
@@ -607,6 +608,7 @@ def buildHoldersDict(
                         "timestamp": t,
                         "price": price,
                         "value": invested_value,
+                        "hash": tx_hash,
                     })
 
             # --- UPDATE CLUSTER GRAPH ---
@@ -635,32 +637,41 @@ def buildHoldersDict(
                     total_bal += h["balance"]
                     total_inv += h["total_invested"]
             avg_p = total_inv / total_bal if total_bal > 0 else 0.0
-            # Store full member set only if snapshot_full=True
             cluster_entry = {
                 "balance": total_bal,
                 "total_invested": total_inv,
                 "avg_price": avg_p,
             }
             if snapshot_full:
-                cluster_entry["members"] = set(members)  # copy to freeze state
+                cluster_entry["members"] = set(members)
             else:
                 cluster_entry["member_count"] = len(members)
             clusters.append(cluster_entry)
 
         # --- STORE HOLDER SNAPSHOT ---
         if snapshot_full:
-            # Full copy (expensive)
-            snap_holders = {addr: dict(h) for addr, h in holders.items()}
+            snap_holders = {}
+            for addr, h in holders.items():
+                h_copy = {
+                    "balance": h["balance"],
+                    "total_invested": h["total_invested"],
+                    "avg_price": h["avg_price"],
+                    "cluster_link_count": h["cluster_link_count"],
+                }
+                if track_trades:
+                    # ❗ FIX: copy lists so old snapshots don't mutate
+                    h_copy["buys"] = [trade.copy() for trade in h["buys"]]
+                    h_copy["sells"] = [trade.copy() for trade in h["sells"]]
+                snap_holders[addr] = h_copy
         else:
-            # Slim snapshot: only essential fields
-            snap_holders = {
-                addr: {
+            snap_holders = {}
+            for addr, h in holders.items():
+                entry = {
                     "balance": h["balance"],
                     "avg_price": h["avg_price"],
                     "cluster_link_count": h["cluster_link_count"],
                 }
-                for addr, h in holders.items()
-            }
+                snap_holders[addr] = entry
 
         holders_snaps.append(snap_holders)
         clusters_snaps.append(clusters)
@@ -669,7 +680,6 @@ def buildHoldersDict(
     if verbose:
         print("Progress: 100% — DONE!")
     return holders_snaps, clusters_snaps, snapshotTimes
-
 
 def balance_weighted_avg_price(obj):
     total_weight = 0
@@ -733,8 +743,8 @@ def load_dune_data_csv(filename="dune_results_complete.csv"):
 #Example usage:
 if __name__ == "__main__":
     token0 = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'
-    token1 = '0x0f7dc5d02cc1e1f5ee47854d534d332a1081ccc8'
-    pair = '0xf97503af8230a7e72909d6614f45e88168ff3c10'
+    token1 = '0x9778ac3d5a2f916aa9abf1eb85c207d990ca2655'
+    pair = '0x7bdb64fb70adb01c7bbfed98e4def7df70c8318b'
     maxLen = 10000000
     [x_axis, y_axis, liq, pool] = buildPoolChart(token0,token1,pair,maxLen , clean = 1)
     all_txs = getAllTransfers(token1, maxLen, 0, 30164015, holder_address=None)
@@ -743,10 +753,9 @@ if __name__ == "__main__":
     all_cex_dict = load_dune_data_csv("dune_known_cex_addresses.csv")
     all_cex_addresses = [row['address'] for row in all_cex_dict]
     
-    pair_addresses = [
-        pair,
-        token1,
-        all_cex_addresses,
+    pair_addresses = pair
+    cex_addresses = all_cex_addresses
+    router_addresses = [
         '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad',  # uniswap_universal_router
         '0x74de5d4fcbf63e00296fd95d33236b9794016631',  # metamask_swap_router
         '0xb1ca6e0283503d2bd17c7a94c57f5f556bc42179', # OGSM V3 Pool
@@ -776,11 +785,20 @@ if __name__ == "__main__":
         '0xc38e4e6a15593f908255214653d3d947ca1c2338', #Mayan: Shift
         '0xd152f549545093347a162dce210e7293f1452150', #Disperse.app
         '0x8fca4ade3a517133ff23ca55cdaea29c78c990b8', #Poloniex 7
-        
+        '0xcf5540fffcdc3d510b18bfca6d2b9987b0772559', #Odos: Router V2
+        '0xad3b67bca8935cb510c8d18bd45f0b94f54a968f', #1Inch: Fusuin Resolver
+        '0x00000047bb99ea4d791bb749d970de71ee0b1a34', #TransitSwap v5: Router
+        '0xf81b45b1663b7ea8716c74796d99bbe4ea26f488', #Ourbit 1 Exchange
+        '0x00000688768803bbd44095770895ad27ad6b0d95', #The T Resolver: Proxy (1Inch)
+        '0x69460570c93f9de5e2edbc3052bf10125f0ca22d', #Rango V2: Rango Diamond
+        '0x00000000009726632680fb29d3f7a9734e3010e2', #Rainbow router
     ]
     print('Building holders dict')
     start_time = time.time()
-    holders_snaps, clusters_snaps, snapshotTimes  = buildHoldersDict(all_txs, x_axis, y_axis, pair_addresses,avg_time_threshold=3600*24, trxCountThreshold=50, min_snapshot_delta = 3600*12, track_trades=False, snapshot_full=False, verbose = True )
+    holders_snaps, clusters_snaps, snapshotTimes  = buildHoldersDict(all_txs, x_axis, y_axis, pair_addresses, cex_addresses, router_addresses,
+                                                                     avg_time_threshold=3600*24, trxCountThreshold=50, 
+                                                                     min_snapshot_delta = 3600*12, track_trades=True, 
+                                                                     snapshot_full=True, verbose = True )
     end_time = time.time()
     execution_time = end_time - start_time
     print(f"Execution time: {execution_time} seconds")
